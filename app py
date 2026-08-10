@@ -1,12 +1,13 @@
 from flask import Flask
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
-import subprocess, os
+import subprocess
 
 app = Flask(__name__)
 
-TOKEN = os.environ.get("TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+# Hardcoded Bot Token & Chat ID
+TOKEN = "8975474043:AAGzCf-y7KESOL22y45YUoQVQCI9mbA57L4"
+CHAT_ID = "5304050102"
 
 updater = Updater(TOKEN, use_context=True)
 dispatcher = updater.dispatcher
