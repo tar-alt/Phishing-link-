@@ -1,20 +1,16 @@
 from flask import Flask
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
-import subprocess
+import subprocess, os
 
-# Flask app
 app = Flask(__name__)
 
-# Telegram Bot Token & Chat ID
-TOKEN = "8975474043:AAGzCf-y7KESOL22y45YUoQVQCI9mbA57L4"
-CHAT_ID = "5304050102"
+TOKEN = os.environ.get("TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
 
-# Setup updater
 updater = Updater(TOKEN, use_context=True)
 dispatcher = updater.dispatcher
 
-# Command to show buttons
 def start(update, context):
     keyboard = [
         [InlineKeyboardButton("🔦 ON", callback_data='on')],
@@ -23,7 +19,6 @@ def start(update, context):
     reply_markup = InlineKeyboardMarkup(keyboard)
     update.message.reply_text("Choose flashlight action:", reply_markup=reply_markup)
 
-# Callback for button press
 def button(update: Update, context):
     query = update.callback_query
     query.answer()
@@ -37,7 +32,6 @@ def button(update: Update, context):
 dispatcher.add_handler(CommandHandler("start", start))
 dispatcher.add_handler(CallbackQueryHandler(button))
 
-# Flask route to trigger bot message when link is visited
 @app.route('/trigger', methods=['GET'])
 def trigger():
     keyboard = [
